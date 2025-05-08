@@ -106,8 +106,8 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Release History
 
-- **v1.1** - July 2023: Enhanced UI/UX, performance improvements, bug fixes, improved crashing algorithm
-- **v1.0** - March 2023: Initial release with basic CPM and Project Crashing features
+- **v1.1** - : Enhanced UI/UX, performance improvements, bug fixes, improved crashing algorithm
+- **v1.0** - : Initial release with basic CPM and Project Crashing features
 
 ---
 
