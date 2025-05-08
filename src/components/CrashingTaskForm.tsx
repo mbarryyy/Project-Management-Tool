@@ -18,7 +18,8 @@ import {
   Snackbar
 } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
-import { useProjectCrashing } from '../hooks/ProjectCrashingContext';
+import { useProjectCrashing, CrashTask } from '../hooks/ProjectCrashingContext';
+import { DependencyType } from '../models/Dependency';
 
 // 任务表单组件 - 用于添加Project Crashing所需的任务
 const CrashingTaskForm: React.FC = () => {
@@ -115,7 +116,7 @@ const CrashingTaskForm: React.FC = () => {
     
     if (!validateForm()) return;
 
-    const newTask = {
+    const newTask: CrashTask = {
       id: id.trim(),
       description: description.trim(),
       duration: Number(normalTime), // Default duration is the normal time
@@ -123,7 +124,11 @@ const CrashingTaskForm: React.FC = () => {
       normalCost: Number(normalCost),
       crashTime: Number(crashTime),
       crashCost: Number(crashCost),
-      predecessorIds
+      predecessors: predecessorIds.map(predId => ({
+        taskId: predId,
+        type: DependencyType.FS,
+        lag: 0
+      }))
     };
 
     addCrashTask(newTask);
@@ -165,6 +170,7 @@ const CrashingTaskForm: React.FC = () => {
           }
           arrow
           placement="right"
+          enterDelay={1000}
         >
           <IconButton size="small" color="info" sx={{ ml: 1 }}>
             <InfoIcon fontSize="small" />
@@ -200,67 +206,71 @@ const CrashingTaskForm: React.FC = () => {
           </Grid>
 
           <Grid item xs={12} sm={3}>
-            <TextField
-              required
-              label="Normal Time"
-              type="number"
-              value={normalTime}
-              onChange={(e) => setNormalTime(e.target.value === '' ? '' : Number(e.target.value))}
-              size="small"
-              inputProps={{ min: 0 }}
-              disabled={isCrashed}
-              error={!!error && error.includes('Normal Time')}
-              fullWidth
-              helperText="Regular duration of the task"
-            />
+            <Tooltip title="Regular duration of the task" arrow placement="top" enterDelay={1000}>
+              <TextField
+                required
+                label="Normal Time"
+                type="number"
+                value={normalTime}
+                onChange={(e) => setNormalTime(e.target.value === '' ? '' : Number(e.target.value))}
+                size="small"
+                inputProps={{ min: 0 }}
+                disabled={isCrashed}
+                error={!!error && error.includes('Normal Time')}
+                fullWidth
+              />
+            </Tooltip>
           </Grid>
 
           <Grid item xs={12} sm={3}>
-            <TextField
-              required
-              label="Normal Cost"
-              type="number"
-              value={normalCost}
-              onChange={(e) => setNormalCost(e.target.value === '' ? '' : Number(e.target.value))}
-              size="small"
-              inputProps={{ min: 0 }}
-              disabled={isCrashed}
-              error={!!error && error.includes('Normal Cost')}
-              fullWidth
-              helperText="Regular cost of the task"
-            />
+            <Tooltip title="Regular cost of the task" arrow placement="top" enterDelay={1000}>
+              <TextField
+                required
+                label="Normal Cost"
+                type="number"
+                value={normalCost}
+                onChange={(e) => setNormalCost(e.target.value === '' ? '' : Number(e.target.value))}
+                size="small"
+                inputProps={{ min: 0 }}
+                disabled={isCrashed}
+                error={!!error && error.includes('Normal Cost')}
+                fullWidth
+              />
+            </Tooltip>
           </Grid>
 
           <Grid item xs={12} sm={3}>
-            <TextField
-              required
-              label="Crash Time"
-              type="number"
-              value={crashTime}
-              onChange={(e) => setCrashTime(e.target.value === '' ? '' : Number(e.target.value))}
-              size="small"
-              inputProps={{ min: 0 }}
-              disabled={isCrashed}
-              error={!!error && error.includes('Crash Time')}
-              fullWidth
-              helperText="Minimum possible duration"
-            />
+            <Tooltip title="Minimum possible duration" arrow placement="top" enterDelay={1000}>
+              <TextField
+                required
+                label="Crash Time"
+                type="number"
+                value={crashTime}
+                onChange={(e) => setCrashTime(e.target.value === '' ? '' : Number(e.target.value))}
+                size="small"
+                inputProps={{ min: 0 }}
+                disabled={isCrashed}
+                error={!!error && error.includes('Crash Time')}
+                fullWidth
+              />
+            </Tooltip>
           </Grid>
 
           <Grid item xs={12} sm={3}>
-            <TextField
-              required
-              label="Crash Cost"
-              type="number"
-              value={crashCost}
-              onChange={(e) => setCrashCost(e.target.value === '' ? '' : Number(e.target.value))}
-              size="small"
-              inputProps={{ min: 0 }}
-              disabled={isCrashed}
-              error={!!error && error.includes('Crash Cost')}
-              fullWidth
-              helperText="Cost when fully crashed"
-            />
+            <Tooltip title="Cost when fully crashed" arrow placement="top" enterDelay={1000}>
+              <TextField
+                required
+                label="Crash Cost"
+                type="number"
+                value={crashCost}
+                onChange={(e) => setCrashCost(e.target.value === '' ? '' : Number(e.target.value))}
+                size="small"
+                inputProps={{ min: 0 }}
+                disabled={isCrashed}
+                error={!!error && error.includes('Crash Cost')}
+                fullWidth
+              />
+            </Tooltip>
           </Grid>
 
           <Grid item xs={12}>

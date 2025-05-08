@@ -1,13 +1,13 @@
-# Project Management Tool - Version 1.1
+# Project Management Tool - Version 1.1.1
 
 A comprehensive project management application with Critical Path Method (CPM) and Project Crashing features.
 
-## What's New in Version 1.1
+## What's New in Version 1.1.1
 
-- **Enhanced UI/UX**: Improved user interface for better usability
-- **Performance Improvements**: Faster calculations and smoother interactions
-- **Bug Fixes**: Fixed various issues for more stable operation
-- **Improved Project Crashing Algorithm**: Better optimization for time and cost analysis
+- **Excel Import/Export**: Import and export project data using Excel files for both Network Diagram and Project Crashing
+- **Position Persistence**: Node positions in Network Diagram are now preserved across iterations
+- **Unified UI**: Consistent styling across all components for better user experience
+- **Improved Error Handling**: Better validation and error reporting for data imports
 
 ## Features
 
@@ -19,6 +19,7 @@ A comprehensive project management application with Critical Path Method (CPM) a
   - Analyze cost impact of crashing activities
   - Visualize project paths and critical paths
   - Manage multiple crashing iterations
+- **Data Import/Export**: Save and load project data using Excel files
 
 ## Technologies
 
@@ -26,6 +27,7 @@ A comprehensive project management application with Critical Path Method (CPM) a
 - TypeScript
 - Material-UI 
 - Context API for state management
+- Excel integration (XLSX)
 
 ## Installation
 
@@ -56,6 +58,7 @@ The project includes a complete implementation of the Project Crashing algorithm
 - Identification of critical paths
 - Step-by-step crashing process
 - Cost analysis for each crashing iteration
+- Import/export functionality with Excel
 
 <!-- Optional: Add a screenshot or a short GIF demo here -->
 <!-- ![Project Screenshot](placeholder_screenshot.png) -->
@@ -104,10 +107,6 @@ In the project directory, you can run:
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Release History
-
-- **v1.1** - : Enhanced UI/UX, performance improvements, bug fixes, improved crashing algorithm
-- **v1.0** - : Initial release with basic CPM and Project Crashing features
 
 ---
 

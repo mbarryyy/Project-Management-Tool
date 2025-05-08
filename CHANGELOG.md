@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2023-07-30
+
+### Added
+- Excel import functionality for Project Crashing module
+- Excel import functionality for Network Diagram module
+- Excel export feature with proper formatting for both modules
+- Position persistence for Network Diagram nodes
+
+### Changed
+- Unified UI styles across all components
+- Improved button styling in management dialogs
+- Enhanced user interaction for loading projects
+
+### Fixed
+- Restored Project Crashing import functionality
+- Fixed Network Diagram conditional rendering issues
+- Improved error handling for file imports
+- Better validation for imported Excel data
+
 ## [1.1.0] - 2023-07-28
 
 ### Added
