@@ -107,11 +107,6 @@ In the project directory, you can run:
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-## Release History
-
-- **v1.1.1** - : Added Excel import/export, position persistence, unified UI styling
-- **v1.1.0** - : Enhanced UI/UX, performance improvements, bug fixes, improved crashing algorithm
-- **v1.0.0** - : Initial release with basic CPM and Project Crashing features
 
 ---
 
