@@ -1,4 +1,4 @@
-import React, { createContext, useContext, ReactNode, useState } from 'react';
+import React, { createContext, useContext, ReactNode, useState, useCallback } from 'react';
 import { Task, Predecessor } from '../models/Task';
 import { DependencyType } from '../models/Dependency';
 import { ProjectCrashingService } from '../services/ProjectCrashingService';
@@ -17,6 +17,7 @@ export interface CrashTask extends Task {
   lateStart?: number;
   lateFinish?: number;
   slack?: number;
+  isCritical?: boolean;
 }
 
 // Define the interface for path analysis in project crashing
@@ -53,6 +54,13 @@ export interface SavedProjectsList {
   projects: SavedProjectCrashingData[];
 }
 
+// Node position type
+export interface NodePosition {
+  id: string;
+  x: number;
+  y: number;
+}
+
 // Define the context type
 interface ProjectCrashingContextType {
   indirectCost: number;
@@ -61,8 +69,8 @@ interface ProjectCrashingContextType {
   setReductionPerUnit: (reduction: number) => void;
   crashTasks: CrashTask[];
   setCrashTasks: (tasks: CrashTask[]) => void;
-  addCrashTask: (task: Omit<CrashTask, 'predecessors' | 'isCritical'> & { predecessorIds?: string[] }) => void;
-  updateCrashTask: (task: CrashTask) => void;
+  addCrashTask: (task: CrashTask) => void;
+  updateCrashTask: (taskId: string, updatedTask: Partial<CrashTask>) => void;
   deleteCrashTask: (taskId: string) => void;
   crashPaths: CrashPath[];
   criticalCrashPaths: CrashPath[];
@@ -81,6 +89,9 @@ interface ProjectCrashingContextType {
   getSavedProjects: () => SavedProjectCrashingData[];
   deleteProject: (projectId: string) => boolean;
   updateProjectName: (projectId: string, newName: string) => boolean;
+  nodePositions: NodePosition[];
+  setNodePositions: React.Dispatch<React.SetStateAction<NodePosition[]>>;
+  resetNodePositions: () => void;
 }
 
 // Create the context
@@ -107,6 +118,9 @@ export const ProjectCrashingProvider: React.FC<{ children: ReactNode }> = ({ chi
   const [totalIterations, setTotalIterations] = useState<number>(0);
   const [projectDuration, setProjectDuration] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  
+  // State for node positions
+  const [nodePositions, setNodePositions] = useState<NodePosition[]>([]);
 
   // Wrapper for setCurrentIteration that also updates projectDuration
   const setCurrentIteration = (iteration: number) => {
@@ -118,61 +132,29 @@ export const ProjectCrashingProvider: React.FC<{ children: ReactNode }> = ({ chi
     }
   };
 
-  // Function to add a new task
-  const addCrashTask = (task: Omit<CrashTask, 'predecessors' | 'isCritical'> & { predecessorIds?: string[] }) => {
-    // Calculate max crash time
-    const maxCrashTime = task.normalTime - task.crashTime;
-    
-    // Calculate slope (cost per unit time reduction)
-    // If max crash time is 0 (Normal Time = Crash Time), set slope to Infinity or a very large number
-    const slope = maxCrashTime > 0 
-      ? (task.crashCost - task.normalCost) / maxCrashTime 
-      : Number.MAX_SAFE_INTEGER; // Cannot be crashed, so set to a very high value
-
-    const newTask: CrashTask = {
-      ...task,
-      predecessors: (task.predecessorIds || []).map(id => ({
-        taskId: id,
-        type: DependencyType.FS,
-        lag: 0
-      })),
-      isCritical: false,
-      duration: task.normalTime, // 确保默认duration使用normalTime
-      slope,
-      maxCrashTime
-    };
-
-    console.log(`Adding new task ${newTask.id} with duration=${newTask.duration}, normalTime=${newTask.normalTime}`);
-    setCrashTasks(prev => [...prev, newTask]);
+  // Function to reset node positions
+  const resetNodePositions = () => {
+    setNodePositions([]);
   };
+
+  // Function to add a new task
+  const addCrashTask = useCallback((task: CrashTask) => {
+    setCrashTasks(prev => [...prev, task]);
+  }, []);
 
   // Function to update a task
-  const updateCrashTask = (updatedTask: CrashTask) => {
-    // Recalculate max crash time
-    const maxCrashTime = updatedTask.normalTime - updatedTask.crashTime;
-    
-    // Recalculate slope
-    const slope = maxCrashTime > 0 
-      ? (updatedTask.crashCost - updatedTask.normalCost) / maxCrashTime 
-      : Number.MAX_SAFE_INTEGER; // Cannot be crashed, so set to a very high value
-
-    const taskToUpdate: CrashTask = {
-      ...updatedTask,
-      duration: updatedTask.normalTime, // Explicitly set duration to normalTime on update
-      slope,
-      maxCrashTime
-    };
-
-    console.log(`Updating task ${taskToUpdate.id}, setting duration to normalTime: ${taskToUpdate.normalTime}`);
+  const updateCrashTask = useCallback((taskId: string, updatedTask: Partial<CrashTask>) => {
     setCrashTasks(prev => 
-      prev.map(task => task.id === updatedTask.id ? taskToUpdate : task)
+      prev.map(task => 
+        task.id === taskId ? { ...task, ...updatedTask } : task
+      )
     );
-  };
+  }, []);
 
   // Function to delete a task
-  const deleteCrashTask = (taskId: string) => {
+  const deleteCrashTask = useCallback((taskId: string) => {
     setCrashTasks(prev => prev.filter(task => task.id !== taskId));
-  };
+  }, []);
 
   // Function to perform the crashing analysis
   const performCrashing = () => {
@@ -442,7 +424,10 @@ export const ProjectCrashingProvider: React.FC<{ children: ReactNode }> = ({ chi
     loadProjectCrashingData,
     getSavedProjects,
     deleteProject,
-    updateProjectName
+    updateProjectName,
+    nodePositions,
+    setNodePositions,
+    resetNodePositions
   };
 
   return (

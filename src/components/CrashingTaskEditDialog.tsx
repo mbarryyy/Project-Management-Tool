@@ -135,7 +135,7 @@ const CrashingTaskEditDialog: React.FC<CrashingTaskEditDialogProps> = ({
     };
     
     // 更新任务
-    updateCrashTask(updatedTask);
+    updateCrashTask(selectedTask.id, updatedTask);
     onClose();
   };
 

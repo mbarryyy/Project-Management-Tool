@@ -10,11 +10,14 @@ import ReactFlow, {
   Position,
   ReactFlowProvider,
   Panel,
-  Handle
+  Handle,
+  NodeChange,
+  NodePositionChange
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Box, Paper, Typography, Divider, Alert } from '@mui/material';
-import { useProjectCrashing, CrashTask } from '../hooks/ProjectCrashingContext';
+import { Box, Paper, Typography, Divider, Alert, Button } from '@mui/material';
+import { useProjectCrashing, CrashTask, NodePosition } from '../hooks/ProjectCrashingContext';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 
 // 自定义节点样式
 const customNodeStyles = {
@@ -100,7 +103,10 @@ const DiagramCanvas = () => {
     crashedTasksHistory, 
     isCrashed, 
     currentIteration,
-    costAnalysis
+    costAnalysis,
+    nodePositions,
+    setNodePositions,
+    resetNodePositions
   } = useProjectCrashing();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -149,8 +155,74 @@ const DiagramCanvas = () => {
     return allCrashedActivities;
   }, [isCrashed, currentIteration, costAnalysis]);
 
+  // Reset node positions to original layout
+  const handleResetPositions = () => {
+    resetNodePositions();
+    // Force re-render with recalculated positions
+    const { nodes: newNodes, edges: newEdges } = createFlowElements();
+    setNodes(newNodes);
+    setEdges(newEdges);
+  };
+
+  // Handle when nodes change positions
+  const handleNodesChange = (changes: NodeChange[]) => {
+    onNodesChange(changes);
+    
+    // Save position changes
+    const positionChanges = changes.filter((change): change is NodePositionChange => 
+      change.type === 'position' && !change.dragging
+    );
+    
+    if (positionChanges.length > 0) {
+      positionChanges.forEach(change => {
+        const nodeId = change.id;
+        const updatedNode = nodes.find(n => n.id === nodeId);
+        if (updatedNode) {
+          setNodePositions((prevPositions: NodePosition[]) => {
+            // Remove old position if exists
+            const filteredPositions = prevPositions.filter(pos => pos.id !== nodeId);
+            // Add new position
+            return [...filteredPositions, {
+              id: nodeId,
+              x: updatedNode.position.x,
+              y: updatedNode.position.y
+            }];
+          });
+        }
+      });
+    }
+  };
+
   const calculatePositions = useCallback((tasks: CrashTask[]) => {
-    // This function remains as is.
+    // First check if we have stored positions
+    if (nodePositions.length > 0) {
+      const positionMap: { [key: string]: { x: number, y: number } } = {};
+      nodePositions.forEach(pos => {
+        positionMap[pos.id] = { x: pos.x, y: pos.y };
+      });
+      
+      // Check if we need to calculate positions for any new tasks
+      const existingIds = nodePositions.map(pos => pos.id);
+      const allTaskIds = tasks.map(task => task.id);
+      const needsCalculation = allTaskIds.some(id => !existingIds.includes(id));
+      
+      if (!needsCalculation) {
+        // All tasks have stored positions
+        return positionMap;
+      } else {
+        // Calculate positions only for new tasks
+        const calculatedPositions = calculateDefaultPositions(tasks);
+        // Merge with existing positions
+        return { ...calculatedPositions, ...positionMap };
+      }
+    } else {
+      // No stored positions, calculate all
+      return calculateDefaultPositions(tasks);
+    }
+  }, [nodePositions]);
+
+  // Original position calculation logic moved to a separate function
+  const calculateDefaultPositions = (tasks: CrashTask[]) => {
     const taskLevels: { [key: string]: number } = {};
     const maxLevel = { value: 0 }; 
     const calculateLevel = (taskId: string, level: number, visited: Set<string>) => {
@@ -188,7 +260,7 @@ const DiagramCanvas = () => {
       levelPositions[level] = position + 1;
     }
     return taskPositions;
-  }, []);
+  };
 
   // Create nodes and edges
   const createFlowElements = useCallback(() => {
@@ -295,14 +367,15 @@ const DiagramCanvas = () => {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         attributionPosition="bottom-right"
+        style={{ background: '#f8f8f8' }}
       >
         <Controls />
-        <Background />
+        <Background color="#e8e8e8" gap={16} />
         <Panel position="top-left">
           <div style={{ 
             background: 'rgba(255,255,255,0.85)', 
@@ -350,6 +423,23 @@ const DiagramCanvas = () => {
               <span>Current Iteration: {currentIteration}</span>
             </div>
           </div>
+        </Panel>
+        <Panel position="bottom-right">
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={<RestartAltIcon fontSize="small" />}
+            onClick={handleResetPositions}
+            sx={{ 
+              mb: 1, 
+              fontSize: '0.75rem', 
+              py: 0.5, 
+              px: 1,
+              backgroundColor: 'rgba(255,255,255,0.85)'
+            }}
+          >
+            Reset
+          </Button>
         </Panel>
       </ReactFlow>
     </div>

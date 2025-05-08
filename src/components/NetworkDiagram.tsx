@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -14,9 +14,38 @@ import ReactFlow, {
   Handle
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Box, Paper, Typography, Divider } from '@mui/material';
+import { 
+  Box, 
+  Paper, 
+  Typography, 
+  Divider, 
+  Button,
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  List,
+  ListItem,
+  ListItemText,
+  ListItemSecondaryAction,
+  TextField,
+  Grid,
+  Alert,
+  Snackbar
+} from '@mui/material';
+import SettingsIcon from '@mui/icons-material/Settings';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import * as XLSX from 'xlsx';
+// @ts-ignore
+import { saveAs } from 'file-saver';
 import { useProject } from '../hooks/ProjectContext';
 import { Task } from '../models/Task';
+import { DependencyType } from '../models/Dependency';
+import { SavedProjectData } from '../hooks/useProjectData';
 
 // 自定义节点样式
 const customNodeStyles = {
@@ -314,19 +343,434 @@ const DiagramCanvas = () => {
 
 // 网络图容器组件 - 主组件
 const NetworkDiagram: React.FC = () => {
-  const { isCalculated } = useProject();
+  const { 
+    tasks, 
+    isCalculated, 
+    projectName, 
+    saveProject, 
+    loadProject, 
+    updateTask, 
+    addTask, 
+    clearProject, 
+    getSavedProjects, 
+    deleteProject, 
+    updateProjectName 
+  } = useProject();
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // 状态管理
+  const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [savedProjects, setSavedProjects] = useState<SavedProjectData[]>([]);
+  const [editingProject, setEditingProject] = useState<{id: string, name: string} | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [alertOpen, setAlertOpen] = useState(false);
+  const [alertMessage, setAlertMessage] = useState('');
+  const [alertSeverity, setAlertSeverity] = useState<'success' | 'error'>('success');
+  
+  // 显示提示信息
+  const showAlert = (message: string, severity: 'success' | 'error') => {
+    setAlertMessage(message);
+    setAlertSeverity(severity);
+    setAlertOpen(true);
+  };
+  
+  // 导出Excel文件
+  const handleExportToExcel = (projectToExport?: SavedProjectData) => {
+    const tasksToExport = projectToExport ? projectToExport.tasks : tasks;
+    const projectNameToExport = projectToExport ? projectToExport.name : projectName;
+    
+    // 创建工作簿
+    const workbook = XLSX.utils.book_new();
+    
+    // 创建任务表格
+    const tasksHeaders = ['Task ID', 'Description', 'Predecessors', 'Duration'];
+    const tasksData = tasksToExport.map(task => [
+      task.id,
+      task.description,
+      task.predecessors.map(p => p.taskId).join(','),
+      task.duration
+    ]);
+    
+    // 添加标题行
+    const titleRow = [`Task List - ${projectNameToExport || 'Project'}`];
+    const completeTasksData = [titleRow, [], tasksHeaders, ...tasksData];
+    
+    const tasksSheet = XLSX.utils.aoa_to_sheet(completeTasksData);
+    
+    // 设置列宽
+    const wscols = [
+      { wch: 10 }, // Task ID
+      { wch: 30 }, // Description
+      { wch: 15 }, // Predecessors
+      { wch: 15 }, // Duration
+    ];
+    
+    tasksSheet['!cols'] = wscols;
+    
+    // 添加到工作簿
+    XLSX.utils.book_append_sheet(workbook, tasksSheet, 'Task List');
+    
+    // 生成Excel文件
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const data = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    
+    // 文件名包含日期和时间
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const fileName = `${projectNameToExport || 'Project'}_TaskList_${dateStr}.xlsx`;
+    
+    // 保存文件
+    saveAs(data, fileName);
+    
+    // 显示成功信息
+    showAlert(`Task List exported as "${fileName}"`, 'success');
+  };
+  
+  // 从Excel导入任务
+  const handleImportFromExcel = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // 重置文件输入字段
+    event.target.value = '';
+    
+    // 读取Excel文件
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        // 获取第一个工作表
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        
+        // 转换为JSON
+        const jsonData = XLSX.utils.sheet_to_json<any>(worksheet, { header: 1, blankrows: false });
+        
+        // 验证格式 - 查找表头行
+        let headerRowIndex = -1;
+        for (let i = 0; i < jsonData.length; i++) {
+          const row = jsonData[i];
+          if (Array.isArray(row) && 
+              row.includes('Task ID') && 
+              row.includes('Description') && 
+              row.includes('Predecessors') && 
+              row.includes('Duration')) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        if (headerRowIndex === -1) {
+          setImportError('Invalid file format: Headers not found');
+          return;
+        }
+        
+        // 获取列索引
+        const headers = jsonData[headerRowIndex];
+        const taskIdIndex = headers.indexOf('Task ID');
+        const descriptionIndex = headers.indexOf('Description');
+        const predecessorsIndex = headers.indexOf('Predecessors');
+        const durationIndex = headers.indexOf('Duration');
+        
+        // 验证必要列是否存在
+        if (taskIdIndex === -1 || durationIndex === -1) {
+          setImportError('Invalid file format: Required columns missing');
+          return;
+        }
+        
+        // 解析任务数据
+        const importedTasks: Task[] = [];
+        let invalidRowFound = false;
+        
+        for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+          const row = jsonData[i];
+          
+          // 确保行有效
+          if (!row || !row[taskIdIndex] || row[taskIdIndex] === '') continue;
+          
+          // 检查必填字段
+          if (row[durationIndex] === undefined) {
+            invalidRowFound = true;
+            continue;
+          }
+          
+          // 处理前置任务
+          let predecessorIds: string[] = [];
+          if (predecessorsIndex !== -1 && row[predecessorsIndex]) {
+            predecessorIds = row[predecessorsIndex].toString().split(',').map((id: string) => id.trim());
+          }
+          
+          // 创建新任务
+          importedTasks.push({
+            id: row[taskIdIndex].toString(),
+            description: descriptionIndex !== -1 ? (row[descriptionIndex]?.toString() || '') : '',
+            duration: parseFloat(row[durationIndex]),
+            predecessors: predecessorIds.map(predId => ({
+              taskId: predId,
+              type: DependencyType.FS,
+              lag: 0
+            })),
+            earlyStart: 0,
+            earlyFinish: 0,
+            lateStart: 0,
+            lateFinish: 0,
+            slack: 0,
+            isCritical: false
+          });
+        }
+        
+        if (importedTasks.length === 0) {
+          setImportError('No valid tasks found in the file');
+          return;
+        }
+        
+        // 清除现有数据并导入新任务
+        clearProject();
+        
+        // 添加导入的任务
+        importedTasks.forEach((task: Task) => {
+          addTask({
+            id: task.id,
+            description: task.description,
+            duration: task.duration,
+            predecessorIds: task.predecessors.map((p: {taskId: string}) => p.taskId)
+          });
+        });
+        
+        // 成功导入
+        setManageDialogOpen(false);
+        showAlert(`Successfully imported ${importedTasks.length} tasks${invalidRowFound ? ' (some invalid rows were skipped)' : ''}`, 'success');
+        
+      } catch (err) {
+        console.error('Error importing file:', err);
+        setImportError('Failed to import file. Please check the file format.');
+      }
+    };
+    
+    reader.onerror = () => {
+      setImportError('Error reading the file');
+    };
+    
+    reader.readAsArrayBuffer(file);
+  };
+  
+  // 触发文件选择
+  const handleImportButtonClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+  
+  // 处理管理项目
+  const handleManageProjects = () => {
+    const projects = getSavedProjects();
+    setSavedProjects(projects);
+    setManageDialogOpen(true);
+  };
+  
+  // 加载项目
+  const handleLoadProject = (projectId: string) => {
+    try {
+      const success = loadProject(projectId);
+      
+      if (success) {
+        const project = savedProjects.find(p => p.id === projectId);
+        showAlert(`Project "${project?.name || 'Unknown'}" loaded successfully`, 'success');
+        setManageDialogOpen(false);
+      } else {
+        showAlert('Failed to load project', 'error');
+      }
+    } catch (err) {
+      showAlert('Failed to load project: Invalid format', 'error');
+      console.error('Failed to load project:', err);
+    }
+  };
+  
+  // 删除项目
+  const handleDeleteProject = (projectId: string) => {
+    if (window.confirm('Are you sure you want to delete this project?')) {
+      const success = deleteProject(projectId);
+      if (success) {
+        setSavedProjects(savedProjects.filter(p => p.id !== projectId));
+        showAlert('Project deleted successfully', 'success');
+      } else {
+        showAlert('Failed to delete project', 'error');
+      }
+    }
+  };
+  
+  // 编辑项目名称
+  const handleEditProjectName = (project: SavedProjectData) => {
+    setEditingProject({ id: project.id, name: project.name });
+  };
+  
+  // 保存编辑后的项目名称
+  const handleSaveProjectName = () => {
+    if (editingProject) {
+      const success = updateProjectName(editingProject.id, editingProject.name);
+      if (success) {
+        setSavedProjects(savedProjects.map(p => 
+          p.id === editingProject.id 
+            ? { ...p, name: editingProject.name } 
+            : p
+        ));
+        setEditingProject(null);
+        showAlert('Project name updated', 'success');
+      } else {
+        showAlert('Failed to update project name', 'error');
+      }
+    }
+  };
 
   return (
     <Paper elevation={3} sx={{ p: 3, mb: 4 }}>
-      <Typography variant="h6" component="h2" gutterBottom>
-        Network Diagram
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h6" component="h2" gutterBottom>
+          Network Diagram
+        </Typography>
+        
+        <Button
+          variant="outlined"
+          color="primary"
+          startIcon={<SettingsIcon />}
+          onClick={handleManageProjects}
+          size="small"
+        >
+          Manage Network Diagrams
+        </Button>
+      </Box>
       
       <Box sx={{ height: 700, border: '1px solid #ccc', position: 'relative' }}>
         <ReactFlowProvider>
           <DiagramCanvas />
         </ReactFlowProvider>
       </Box>
+      
+      {/* 隐藏的文件输入 */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImportFromExcel}
+        style={{ display: 'none' }}
+        accept=".xlsx,.xls"
+      />
+      
+      {/* 管理项目对话框 */}
+      <Dialog 
+        open={manageDialogOpen} 
+        onClose={() => setManageDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Manage Network Diagrams</DialogTitle>
+        <DialogContent>
+          {savedProjects.length === 0 ? (
+            <Typography variant="body1" align="center" sx={{ my: 2 }}>
+              No saved network diagrams found
+            </Typography>
+          ) : (
+            <List>
+              {savedProjects.map((project) => (
+                <ListItem key={project.id} divider>
+                  {editingProject && editingProject.id === project.id ? (
+                    <Grid container alignItems="center" spacing={2}>
+                      <Grid item xs>
+                        <TextField
+                          fullWidth
+                          value={editingProject.name}
+                          onChange={(e) => setEditingProject({...editingProject, name: e.target.value})}
+                          size="small"
+                          autoFocus
+                        />
+                      </Grid>
+                      <Grid item>
+                        <Button onClick={handleSaveProjectName} size="small" color="primary">
+                          Save
+                        </Button>
+                        <Button onClick={() => setEditingProject(null)} size="small">
+                          Cancel
+                        </Button>
+                      </Grid>
+                    </Grid>
+                  ) : (
+                    <>
+                      <ListItemText 
+                        primary={project.name} 
+                        secondary={`Last updated: ${new Date(project.lastUpdated).toLocaleString()} | Tasks: ${project.tasks.length}`} 
+                        onClick={() => handleLoadProject(project.id)}
+                        sx={{ cursor: 'pointer' }}
+                      />
+                      <ListItemSecondaryAction sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleExportToExcel(project)} 
+                          title="Export to Excel"
+                          size="small"
+                          sx={{ color: 'primary.main', width: '28px', height: '28px' }}
+                        >
+                          <FileDownloadIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleEditProjectName(project)}
+                          title="Edit Project Name"
+                          size="small"
+                          sx={{ color: 'primary.main', width: '28px', height: '28px' }}
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleDeleteProject(project.id)}
+                          title="Delete Project"
+                          size="small"
+                          sx={{ color: 'error.main', width: '28px', height: '28px' }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </ListItemSecondaryAction>
+                    </>
+                  )}
+                </ListItem>
+              ))}
+            </List>
+          )}
+          
+          {importError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {importError}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            onClick={handleImportButtonClick}
+            startIcon={<FolderOpenIcon />}
+          >
+            Import from Excel
+          </Button>
+          <Button onClick={() => {
+            setManageDialogOpen(false);
+            setImportError(null);
+          }}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+      
+      {/* 提示信息 */}
+      <Snackbar 
+        open={alertOpen} 
+        autoHideDuration={3000} 
+        onClose={() => setAlertOpen(false)}
+      >
+        <Alert severity={alertSeverity} onClose={() => setAlertOpen(false)}>
+          {alertMessage}
+        </Alert>
+      </Snackbar>
     </Paper>
   );
 };
