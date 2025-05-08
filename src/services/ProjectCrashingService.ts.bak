@@ -1,0 +1,768 @@
+import { CrashTask, CrashPath, CostAnalysisResult } from '../hooks/ProjectCrashingContext';
+
+export class ProjectCrashingService {
+  /**
+   * 计算所有可能的路径
+   */
+  static calculateAllPaths(tasks: CrashTask[]): CrashPath[] {
+    // 创建任务ID到任务的映射
+    const taskMap = new Map<string, CrashTask>();
+    tasks.forEach(task => taskMap.set(task.id, task));
+
+    // 找出所有没有前置任务的任务（起始任务）
+    const startTasks = tasks.filter(task => task.predecessors.length === 0);
+    if (startTasks.length === 0) return [];
+
+    // 找出所有没有后续任务的任务（结束任务）
+    const endTasks = tasks.filter(task => {
+      return !tasks.some(t => t.predecessors.some(p => p.taskId === task.id));
+    });
+    if (endTasks.length === 0) return [];
+
+    // 存储所有找到的路径
+    const allPaths: CrashPath[] = [];
+
+    // 对每个起始任务，使用深度优先搜索找出所有路径
+    startTasks.forEach(startTask => {
+      this.findPaths(
+        startTask.id,
+        [],
+        new Set<string>(),
+        taskMap,
+        tasks,
+        allPaths
+      );
+    });
+
+    // 计算每条路径的持续时间并确定关键路径
+    const calculatedPaths = this.calculatePathDurations(allPaths, taskMap);
+
+    return calculatedPaths;
+  }
+
+  /**
+   * 深度优先搜索找出所有路径
+   */
+  private static findPaths(
+    currentTaskId: string,
+    currentPath: string[],
+    visited: Set<string>,
+    taskMap: Map<string, CrashTask>,
+    allTasks: CrashTask[],
+    allPaths: CrashPath[]
+  ): void {
+    if (visited.has(currentTaskId)) {
+      console.warn(`Cycle detected at task ${currentTaskId}, skipping`);
+      return;
+    }
+
+    // 添加当前任务到路径
+    const newPath = [...currentPath, currentTaskId];
+    visited.add(currentTaskId);
+
+    // 找出所有以当前任务为前置的任务
+    const successorTasks = allTasks.filter(task => 
+      task.predecessors.some(pred => pred.taskId === currentTaskId)
+    );
+
+    // 如果没有后续任务，这是一条完整的路径
+    if (successorTasks.length === 0) {
+      allPaths.push({
+        tasks: newPath,
+        durations: [0], // 初始化持续时间数组，会在计算方法中更新
+        isCritical: false
+      });
+    } else {
+      // 否则，继续探索每个后续任务
+      successorTasks.forEach(task => {
+        this.findPaths(
+          task.id,
+          newPath,
+          new Set<string>(visited),
+          taskMap,
+          allTasks,
+          allPaths
+        );
+      });
+    }
+  }
+
+  /**
+   * 计算每条路径的持续时间并确定关键路径
+   */
+  private static calculatePathDurations(
+    paths: CrashPath[],
+    taskMap: Map<string, CrashTask>
+  ): CrashPath[] {
+    // 计算每条路径的持续时间
+    paths.forEach(path => {
+      const duration = path.tasks.reduce((total, taskId) => {
+        const task = taskMap.get(taskId);
+        return total + (task ? task.duration : 0);
+      }, 0);
+      path.durations[0] = duration;
+    });
+
+    // 找出最大持续时间（项目持续时间）
+    const maxDuration = Math.max(...paths.map(path => path.durations[0]));
+    
+    // 标记关键路径 - 使用小的容差值来处理浮点数精度问题
+    const EPSILON = 0.000001;  // 容差值，处理浮点数比较
+    paths.forEach(path => {
+      // 只有持续时间与最大持续时间的差值小于容差时才被视为关键路径
+      path.isCritical = Math.abs(path.durations[0] - maxDuration) < EPSILON;
+    });
+
+    return paths;
+  }
+
+  /**
+   * 执行项目压缩算法，返回所有迭代的结果
+   */
+  static crashProject(
+    tasks: CrashTask[], 
+    indirectCost: number, 
+    reductionPerUnit: number
+  ): {
+    crashedTasks: CrashTask[][],
+    paths: CrashPath[],
+    criticalPaths: CrashPath[],
+    costAnalysis: CostAnalysisResult[]
+  } {
+    // Create a deep copy for the initial state (Iteration 0)
+    // This ensures that modifications for the first crash don't alter this initial state.
+    let initialTasksState = JSON.parse(JSON.stringify(tasks)) as CrashTask[];
+    initialTasksState = initialTasksState.map(task => ({
+      ...task,
+      duration: task.normalTime // Explicitly set duration to normalTime for the pristine initial state
+    }));
+    
+    console.log('Initial tasks for Iteration 0 (crashedTasks[0]):',
+      initialTasksState.map(t => `${t.id}: duration=${t.duration}, normalTime=${t.normalTime}`));
+    
+    const crashedTasks: CrashTask[][] = [initialTasksState]; // Store the pristine initial state
+
+    // Now, create a working copy for the crashing process that will become Iteration 1 onwards
+    let currentTasks = JSON.parse(JSON.stringify(initialTasksState)) as CrashTask[];
+    
+    // Calculate initial paths based on the pristine initial state
+    let paths = this.calculateAllPaths(initialTasksState); // Use initialTasksState for initial path/duration calc
+    let criticalPaths = paths.filter(path => path.isCritical);
+    
+    const initialDuration = criticalPaths[0]?.durations[0] || 0;
+    const initialDirectCost = initialTasksState.reduce((sum, task) => sum + task.normalCost, 0);
+    
+    const costAnalysis: CostAnalysisResult[] = [{
+      projectDuration: initialDuration,
+      crashedActivities: [],
+      crashCost: 0,
+      directCost: initialDirectCost,
+      indirectCost: indirectCost,
+      totalCost: initialDirectCost + indirectCost,
+      isOptimum: false,
+      isCrashPoint: false
+    }];
+
+    console.log(`Initial project duration (from initialTasksState): ${initialDuration}`);
+
+    let iteration = 0;
+    let canContinueCrashing = true;
+    
+    // 声明变量以支持整个过程
+    let taskToModify: CrashTask | null = null;
+    let currentIterationTaskIds: string[] = [];
+    let multipleTasksCrashing = false;
+    let allTasksToModify: CrashTask[] = [];
+    let allNextStates: CrashTask[][] = [];
+    
+    while (canContinueCrashing) {
+      // Before any modifications for this iteration, if iteration > 0, 
+      // currentTasks should be a snapshot of the PREVIOUS iteration's end state.
+      // For the first pass (iteration becomes 1), currentTasks is a copy of initialTasksState.
+
+      // Find crashable tasks on critical paths from the current state of currentTasks
+      let crashableTasksInCurrentState: CrashTask[] = [];
+      criticalPaths.forEach(path => {
+        const tasksOnPath = path.tasks
+          .map(taskId => currentTasks.find(t => t.id === taskId))
+          .filter(task => task && task.maxCrashTime && task.maxCrashTime > 0) as CrashTask[];
+        tasksOnPath.forEach(task => {
+          if (!crashableTasksInCurrentState.some(t => t.id === task.id)) {
+            crashableTasksInCurrentState.push(task);
+          }
+        });
+      });
+      
+      if (crashableTasksInCurrentState.length === 0) {
+        canContinueCrashing = false;
+        if (costAnalysis.length > 0) costAnalysis[costAnalysis.length - 1].isCrashPoint = true;
+        break;
+      }
+      
+      // 重置变量状态
+      taskToModify = null;
+      currentIterationTaskIds = [];
+      multipleTasksCrashing = false;
+      allTasksToModify = [];
+      allNextStates = [];
+      
+      // 修改逻辑以处理多条关键路径的情况
+      // 1. 找出在所有关键路径上都出现的任务（共同任务）
+      const criticalTaskSets = criticalPaths.map(path => new Set(path.tasks));
+      const commonTasks = crashableTasksInCurrentState.filter(task => 
+        criticalTaskSets.every(taskSet => taskSet.has(task.id))
+      );
+      
+      let bestCommonTask: CrashTask | null = null;
+      if (commonTasks.length > 0) {
+        // 如果存在共同任务，找出斜率最小的
+        commonTasks.sort((a, b) => (a.slope || Infinity) - (b.slope || Infinity));
+        bestCommonTask = commonTasks[0];
+        console.log(`[ProjectCrashingService] Found ${commonTasks.length} common tasks, best is ${bestCommonTask.id} with slope ${bestCommonTask.slope}`);
+      }
+      
+      // 2. 计算任务组合方案
+      // 记录每个关键路径的所有可压缩任务
+      const pathTaskMap = new Map<number, CrashTask[]>();
+      criticalPaths.forEach((path, index) => {
+        const tasksOnPath = path.tasks
+          .map(taskId => crashableTasksInCurrentState.find(t => t.id === taskId))
+          .filter((task): task is CrashTask => task !== undefined && task.maxCrashTime !== undefined && task.maxCrashTime > 0);
+        pathTaskMap.set(index, tasksOnPath);
+      });
+      
+      // 找出所有可能的任务组合
+      interface TaskCombination {
+        tasks: CrashTask[];
+        totalSlope: number;
+        coversPaths: Set<number>;
+      }
+      
+      // 初始化最佳组合变量
+      let bestCombination: TaskCombination | null = null;
+      
+      // 递归生成任务组合
+      const generateCombinations = (
+        pathIndex: number,
+        currentCombination: TaskCombination,
+        allPaths: number[]
+      ): void => {
+        // 终止条件：已处理所有路径
+        if (pathIndex >= allPaths.length) {
+          // 检查组合是否覆盖所有关键路径
+          if (currentCombination.coversPaths.size === criticalPaths.length) {
+            if (!bestCombination || currentCombination.totalSlope < bestCombination.totalSlope) {
+              // 创建新对象而不是引用
+              bestCombination = {
+                tasks: [...currentCombination.tasks],
+                totalSlope: currentCombination.totalSlope,
+                coversPaths: new Set<number>()
+              };
+              // 复制集合的内容
+              currentCombination.coversPaths.forEach(p => {
+                if (bestCombination) bestCombination.coversPaths.add(p);
+              });
+            }
+          }
+          return;
+        }
+        
+        const pathId = allPaths[pathIndex];
+        
+        // 如果当前路径已经被其它选择的任务覆盖，直接处理下一条路径
+        if (currentCombination.coversPaths.has(pathId)) {
+          generateCombinations(pathIndex + 1, currentCombination, allPaths);
+          return;
+        }
+        
+        // 获取当前路径上的所有可压缩任务
+        const tasksForPath = pathTaskMap.get(pathId) || [];
+        
+        // 尝试为当前路径选择每个可能的任务
+        for (const task of tasksForPath) {
+          // 计算此任务能覆盖哪些路径
+          const coveredPaths = new Set<number>();
+          pathTaskMap.forEach((tasks, idx) => {
+            if (tasks.some(t => t.id === task.id)) {
+              coveredPaths.add(idx);
+            }
+          });
+          
+          // 创建新的组合
+          const newCoversPaths = new Set<number>();
+          currentCombination.coversPaths.forEach(p => newCoversPaths.add(p));
+          coveredPaths.forEach(p => newCoversPaths.add(p));
+          
+          const newCombination: TaskCombination = {
+            tasks: [...currentCombination.tasks, task],
+            totalSlope: currentCombination.totalSlope + (task.slope || Infinity),
+            coversPaths: newCoversPaths
+          };
+          
+          // 递归处理下一条路径
+          generateCombinations(pathIndex + 1, newCombination, allPaths);
+        }
+
+        // 重要改进：如果在当前路径没有找到合适的任务，也需要尝试其他路径
+        // 有些路径的组合可能需要多个任务才能覆盖所有关键路径
+        if (tasksForPath.length === 0) {
+          generateCombinations(pathIndex + 1, currentCombination, allPaths);
+        }
+      };
+      
+      // 计算所有可能的任务组合
+      const initialCombination: TaskCombination = {
+        tasks: [],
+        totalSlope: 0,
+        coversPaths: new Set<number>()
+      };
+      const pathIndices = Array.from(pathTaskMap.keys());
+      generateCombinations(0, initialCombination, pathIndices);
+      
+      // 检查是否找到了能覆盖所有关键路径的组合
+      if (bestCombination) {
+        console.log(`[ProjectCrashingService] Found combination covering ${(bestCombination as TaskCombination).coversPaths.size} of ${criticalPaths.length} paths`);
+        
+        // 如果没有覆盖所有关键路径，则尝试构建更全面的组合
+        if ((bestCombination as TaskCombination).coversPaths.size < criticalPaths.length) {
+          console.log(`[ProjectCrashingService] Need to find a more comprehensive combination`);
+          
+          // 重新计算：不单独选择路径上的任务，而是尝试所有可能的组合
+          let allCrashableTasks = crashableTasksInCurrentState;
+          
+          // 计算覆盖每个关键路径的任务集合
+          type TaskWithCoverage = {
+            task: CrashTask;
+            coveredPaths: Set<number>;
+          };
+          
+          const tasksWithCoverage: TaskWithCoverage[] = allCrashableTasks.map(task => {
+            const coveredPaths = new Set<number>();
+            criticalPaths.forEach((path, idx) => {
+              if (path.tasks.includes(task.id)) {
+                coveredPaths.add(idx);
+              }
+            });
+            return { task, coveredPaths };
+          });
+          
+          // 按照每个任务覆盖的路径数量排序（优先考虑覆盖多条路径的任务）
+          tasksWithCoverage.sort((a, b) => 
+            b.coveredPaths.size - a.coveredPaths.size || 
+            (a.task.slope || Infinity) - (b.task.slope || Infinity)
+          );
+          
+          // 贪心算法：从覆盖路径最多的任务开始选择，直到覆盖所有关键路径
+          const selectedTasks: CrashTask[] = [];
+          const coveredPathIndices = new Set<number>();
+          let totalSlope = 0;
+          
+          for (const { task, coveredPaths } of tasksWithCoverage) {
+            let newCoverage = false;
+            
+            // 检查任务是否能覆盖尚未覆盖的路径
+            coveredPaths.forEach(pathIdx => {
+              if (!coveredPathIndices.has(pathIdx)) {
+                newCoverage = true;
+                coveredPathIndices.add(pathIdx);
+              }
+            });
+            
+            // 只有当任务能增加覆盖面时才选择它
+            if (newCoverage) {
+              selectedTasks.push(task);
+              totalSlope += task.slope || Infinity;
+            }
+            
+            // 如果已覆盖所有关键路径，则停止选择
+            if (coveredPathIndices.size === criticalPaths.length) {
+              break;
+            }
+          }
+          
+          // 如果找到全覆盖方案，则更新最佳组合
+          if (coveredPathIndices.size === criticalPaths.length) {
+            console.log(`[ProjectCrashingService] Found comprehensive combination with ${selectedTasks.length} tasks`);
+            
+            // 创建新的全覆盖组合
+            bestCombination = {
+              tasks: selectedTasks,
+              totalSlope: totalSlope,
+              coversPaths: coveredPathIndices
+            };
+          }
+        }
+      }
+      
+      // 比较共同任务和组合任务，选择最优方案
+      let useCommonTask = false;
+      let useCombination = false;
+      
+      // 如果有共同任务和有效组合，比较它们
+      if (bestCommonTask && bestCombination) {
+        console.log(`[ProjectCrashingService] Comparing best common task ${bestCommonTask.id} (slope=${bestCommonTask.slope}) with combination (totalSlope=${(bestCombination as TaskCombination).totalSlope})`);
+        
+        if ((bestCommonTask.slope || Infinity) <= (bestCombination as TaskCombination).totalSlope) {
+          useCommonTask = true;
+        } else {
+          useCombination = true;
+        }
+      } 
+      // 只有共同任务
+      else if (bestCommonTask) {
+        useCommonTask = true;
+      } 
+      // 只有组合
+      else if (bestCombination) {
+        useCombination = true;
+      }
+      
+      // 根据决策选择任务
+      if (useCommonTask && bestCommonTask) {
+        console.log(`[ProjectCrashingService] Selected common task ${bestCommonTask.id} with slope ${bestCommonTask.slope}`);
+        taskToModify = bestCommonTask;
+        currentIterationTaskIds = [bestCommonTask.id]; // 单个共同任务
+      } 
+      else if (useCombination && bestCombination) {
+        console.log(`[ProjectCrashingService] Selected task combination with totalSlope ${(bestCombination as TaskCombination).totalSlope}`);
+        
+        // 获取任务组合中的所有任务IDs
+        currentIterationTaskIds = (bestCombination as TaskCombination).tasks.map((t: CrashTask) => t.id);
+        console.log(`[ProjectCrashingService] Task combination: ${currentIterationTaskIds.join(', ')}`);
+        
+        // 关键改变：同时压缩所有必要的任务，而不只是组合中斜率最小的一个
+        // 1. 创建多个任务状态副本，每个任务一个
+        let taskCombinationNextStates: CrashTask[][] = [];
+        
+        for (const task of (bestCombination as TaskCombination).tasks) {
+          // 为每个任务创建当前状态的副本
+          let nextTaskState = JSON.parse(JSON.stringify(currentTasks)) as CrashTask[];
+          const taskToCrash = nextTaskState.find(t => t.id === task.id);
+          
+          if (taskToCrash && taskToCrash.maxCrashTime && taskToCrash.maxCrashTime > 0) {
+            // 减少该任务的持续时间
+            taskToCrash.duration -= 1;
+            taskToCrash.maxCrashTime -= 1;
+            taskCombinationNextStates.push(nextTaskState);
+          }
+        }
+        
+        // 只有一个任务的情况：使用正常流程
+        if (taskCombinationNextStates.length === 1) {
+          // 从组合中选择一个斜率最小的任务作为主要压缩任务（用于成本计算）
+          (bestCombination as TaskCombination).tasks.sort((a: CrashTask, b: CrashTask) => (a.slope || Infinity) - (b.slope || Infinity));
+          taskToModify = (bestCombination as TaskCombination).tasks[0];
+        } 
+        // 多个任务的情况：使用多任务处理逻辑
+        else if (taskCombinationNextStates.length > 1) {
+          // 设置多任务压缩标志
+          multipleTasksCrashing = true;
+          
+          // 存储所有状态以备后续使用
+          allTasksToModify = (bestCombination as TaskCombination).tasks;
+          allNextStates = taskCombinationNextStates;
+          
+          // 仍然选择一个代表任务用于主循环逻辑和成本计算
+          (bestCombination as TaskCombination).tasks.sort((a: CrashTask, b: CrashTask) => (a.slope || Infinity) - (b.slope || Infinity));
+          taskToModify = (bestCombination as TaskCombination).tasks[0];
+        }
+        // 没有任务的情况：返回错误
+        else {
+          console.error(`[ProjectCrashingService] No valid tasks to crash in combination`);
+          canContinueCrashing = false;
+          if (costAnalysis.length > 0) {
+            costAnalysis[costAnalysis.length - 1].isCrashPoint = true;
+          }
+          break;
+        }
+      } 
+      // 没有找到任何可行方案，回退到简单选择
+      else {
+        console.warn(`[ProjectCrashingService] No valid task found, falling back to lowest slope`);
+        crashableTasksInCurrentState.sort((a, b) => (a.slope || Infinity) - (b.slope || Infinity));
+        if (crashableTasksInCurrentState.length > 0) {
+          taskToModify = crashableTasksInCurrentState[0];
+          currentIterationTaskIds = [crashableTasksInCurrentState[0].id]; // 单个任务
+        }
+      }
+      
+      if (!taskToModify) {
+        console.error(`[ProjectCrashingService] Failed to select a task to crash, stopping`);
+        canContinueCrashing = false;
+        if (costAnalysis.length > 0) costAnalysis[costAnalysis.length - 1].isCrashPoint = true;
+        break;
+      }
+
+      // 处理单任务和多任务压缩的不同情况
+      const crashTimeReduction = 1; // 定义在外部，使两个分支都能访问
+      let nextTasksState: CrashTask[];
+      let taskInNextStateToCrash: CrashTask | undefined;
+      
+      if (!multipleTasksCrashing) {
+        // 单任务压缩：创建一个新状态
+        nextTasksState = JSON.parse(JSON.stringify(currentTasks)) as CrashTask[];
+        
+        // 在新状态中找到要修改的任务
+        taskInNextStateToCrash = nextTasksState.find(t => t.id === taskToModify!.id);
+        if (!taskInNextStateToCrash) {
+          console.error(`Task ${taskToModify!.id} not found in nextTasksState, skipping iteration.`);
+          canContinueCrashing = false; // Avoid infinite loop
+          break;
+        }
+
+        iteration++; // Increment iteration number for the new state we are creating
+        
+        taskInNextStateToCrash.duration -= crashTimeReduction;
+        taskInNextStateToCrash.maxCrashTime = (taskInNextStateToCrash.maxCrashTime || 0) - crashTimeReduction;
+      }
+      else {
+        // 多任务压缩：合并所有状态
+        iteration++;
+        
+        // 使用第一个状态作为基础
+        nextTasksState = allNextStates[0];
+        
+        // 对于每个其他状态，找到对应被压缩的任务并应用相同的更改
+        for (let i = 1; i < allNextStates.length; i++) {
+          const state = allNextStates[i];
+          for (const task of state) {
+            // 找到对应的基础状态中的任务
+            const correspondingTask = nextTasksState.find(t => t.id === task.id);
+            if (correspondingTask && task.duration < correspondingTask.duration) {
+              // 应用更改
+              correspondingTask.duration = task.duration;
+              correspondingTask.maxCrashTime = task.maxCrashTime;
+            }
+          }
+        }
+        
+        // 找到代表任务在新状态中的对应任务
+        if (taskToModify) {
+          taskInNextStateToCrash = nextTasksState.find(t => t.id === taskToModify.id);
+        }
+      }
+      
+      // 更新路径和关键路径基于新状态
+      let newPaths = this.calculateAllPaths(nextTasksState);
+      let newCriticalPaths = newPaths.filter(path => path.isCritical);
+      const newMaxDuration = newCriticalPaths[0]?.durations[0] || 
+                           (newPaths.length > 0 ? Math.max(...newPaths.map(p => p.durations[0])) : 0);
+
+      // Update all path durations for the current iteration step
+      // The 'paths' variable should track all historical durations for each path
+      paths.forEach(path => {
+        const taskBeingCrashedIsOnThisPath = path.tasks.includes(taskInNextStateToCrash.id);
+        let previousDurationForPath = 0;
+        // Iteration is 1-based here for path.durations indexing after initial state
+        if (iteration === 1) { // First crash
+            previousDurationForPath = initialTasksState.find(t => t.id === path.tasks[0]) ? 
+                                      path.tasks.reduce((sum, tid) => sum + (initialTasksState.find(t=>t.id===tid)?.duration || 0) ,0) 
+                                      : 0;
+        } else if (path.durations[iteration-1] !== undefined) { // Subsequent crashes
+            previousDurationForPath = path.durations[iteration-1];
+        } else { // Fallback if a duration is missing (should ideally not happen)
+            const taskMap = new Map(currentTasks.map(t => [t.id, t]));
+            previousDurationForPath = path.tasks.reduce((sum, tid)=> sum + (taskMap.get(tid)?.duration || 0), 0);
+        }
+
+        if (taskBeingCrashedIsOnThisPath) {
+          path.durations[iteration] = previousDurationForPath - crashTimeReduction;
+        } else {
+          path.durations[iteration] = previousDurationForPath;
+        }
+      });
+      paths.forEach(p => p.isCritical = p.durations[iteration] === newMaxDuration);
+      criticalPaths = paths.filter(p => p.isCritical); // Update criticalPaths for the next find cycle
+      
+      const crashCost = taskToModify ? taskToModify.slope || 0 : 0;
+      const prevCostAnalysis = costAnalysis[costAnalysis.length - 1];
+      const newDirectCost = prevCostAnalysis.directCost + crashCost;
+      const daysReduced = initialDuration - newMaxDuration;
+      const newIndirectCost = indirectCost - (daysReduced * reductionPerUnit);
+      const newTotalCost = newDirectCost + newIndirectCost;
+      
+      costAnalysis.push({
+        projectDuration: newMaxDuration,
+        crashedActivities: currentIterationTaskIds, // 使用当前迭代中所有要压缩的任务ID
+        crashCost: crashCost,
+        directCost: newDirectCost,
+        indirectCost: newIndirectCost,
+        totalCost: newTotalCost,
+        isOptimum: false,
+        isCrashPoint: false
+      });
+      
+      crashedTasks.push(nextTasksState); // Store the new state
+      currentTasks = nextTasksState; // The new state becomes current for the next loop pass
+    }
+    
+    // 找出总成本最低的结果，并标记为最优点
+    const minCostIndex = costAnalysis.reduce(
+      (minIndex, item, index) => 
+        item.totalCost < costAnalysis[minIndex].totalCost ? index : minIndex, 
+      0
+    );
+    costAnalysis[minCostIndex].isOptimum = true;
+    
+    return {
+      crashedTasks,
+      paths,
+      criticalPaths,
+      costAnalysis
+    };
+  }
+  
+  /**
+   * 计算任务的松弛时间
+   */
+  static calculateSlackTimes(tasks: CrashTask[], criticalPaths: CrashPath[]): CrashTask[] {
+    // 创建任务ID到任务的映射
+    const taskMap = new Map<string, CrashTask>();
+    tasks.forEach(task => taskMap.set(task.id, task));
+    
+    // 计算早开始和早结束时间
+    const earlyTimes: { [key: string]: { earlyStart: number, earlyFinish: number } } = {};
+    
+    // 找出所有没有前置任务的任务（起始任务）
+    const startTasks = tasks.filter(task => task.predecessors.length === 0);
+    
+    // 初始化起始任务的早开始时间为0
+    startTasks.forEach(task => {
+      earlyTimes[task.id] = {
+        earlyStart: 0,
+        earlyFinish: task.duration
+      };
+    });
+    
+    // 使用拓扑排序获取任务列表
+    const sortedTasks = this.topologicalSort(tasks);
+    
+    // 前向遍历计算早开始和早结束时间
+    for (const task of sortedTasks) {
+      if (startTasks.includes(task)) continue; // 跳过已处理的起始任务
+      
+      let maxEarlyFinish = 0;
+      
+      // 找出所有前置任务的最大早结束时间
+      task.predecessors.forEach(pred => {
+        const predTask = taskMap.get(pred.taskId);
+        if (predTask && earlyTimes[pred.taskId]) {
+          maxEarlyFinish = Math.max(maxEarlyFinish, earlyTimes[pred.taskId].earlyFinish);
+        }
+      });
+      
+      earlyTimes[task.id] = {
+        earlyStart: maxEarlyFinish,
+        earlyFinish: maxEarlyFinish + task.duration
+      };
+    }
+    
+    // 找出项目的总持续时间（最大早结束时间）
+    const projectDuration = Math.max(...Object.values(earlyTimes).map(time => time.earlyFinish));
+    
+    // 计算晚开始和晚结束时间
+    const lateTimes: { [key: string]: { lateStart: number, lateFinish: number } } = {};
+    
+    // 找出所有没有后续任务的任务（结束任务）
+    const endTasks = tasks.filter(task => {
+      return !tasks.some(t => t.predecessors.some(p => p.taskId === task.id));
+    });
+    
+    // 初始化结束任务的晚结束时间为项目持续时间
+    endTasks.forEach(task => {
+      lateTimes[task.id] = {
+        lateFinish: projectDuration,
+        lateStart: projectDuration - task.duration
+      };
+    });
+    
+    // 反向遍历计算晚开始和晚结束时间
+    for (const task of [...sortedTasks].reverse()) {
+      if (endTasks.includes(task)) continue; // 跳过已处理的结束任务
+      
+      // 找出所有以此任务为前置的任务
+      const successors = tasks.filter(t => 
+        t.predecessors.some(p => p.taskId === task.id)
+      );
+      
+      let minLateStart = Infinity;
+      
+      // 找出所有后续任务的最小晚开始时间
+      successors.forEach(succ => {
+        if (lateTimes[succ.id]) {
+          minLateStart = Math.min(minLateStart, lateTimes[succ.id].lateStart);
+        }
+      });
+      
+      lateTimes[task.id] = {
+        lateFinish: minLateStart,
+        lateStart: minLateStart - task.duration
+      };
+    }
+    
+    // 计算每个任务的松弛时间并更新任务
+    return tasks.map(task => {
+      const early = earlyTimes[task.id] || { earlyStart: 0, earlyFinish: 0 };
+      const late = lateTimes[task.id] || { lateStart: 0, lateFinish: 0 };
+      const slack = late.lateStart - early.earlyStart;
+      
+      // 识别关键任务（松弛时间为0的任务）
+      const isCritical = slack === 0;
+      
+      return {
+        ...task,
+        earlyStart: early.earlyStart,
+        earlyFinish: early.earlyFinish,
+        lateStart: late.lateStart,
+        lateFinish: late.lateFinish,
+        slack,
+        isCritical
+      };
+    });
+  }
+  
+  /**
+   * 使用拓扑排序获取任务列表
+   */
+  private static topologicalSort(tasks: CrashTask[]): CrashTask[] {
+    const result: CrashTask[] = [];
+    const visited = new Set<string>();
+    const temp = new Set<string>();
+    
+    // 创建任务ID到任务的映射
+    const taskMap = new Map<string, CrashTask>();
+    tasks.forEach(task => taskMap.set(task.id, task));
+    
+    const visit = (taskId: string) => {
+      if (temp.has(taskId)) {
+        console.warn(`Cycle detected at task ${taskId}`);
+        return; // 检测到循环依赖
+      }
+      
+      if (visited.has(taskId)) return;
+      
+      temp.add(taskId);
+      
+      const task = taskMap.get(taskId);
+      if (task) {
+        // 访问所有前置任务
+        task.predecessors.forEach(pred => {
+          visit(pred.taskId);
+        });
+        
+        visited.add(taskId);
+        temp.delete(taskId);
+        result.push(task);
+      }
+    };
+    
+    // 对每个任务进行访问
+    tasks.forEach(task => {
+      if (!visited.has(task.id)) {
+        visit(task.id);
+      }
+    });
+    
+    return result;
+  }
+} 
