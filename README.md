@@ -2,6 +2,8 @@
 
 A comprehensive project management application with Critical Path Method (CPM) and Project Crashing features.
 
+> **New to programming?** Follow our [detailed installation guide for non-technical users](INSTALLATION_GUIDE.md).
+
 ## What's New in Version 1.1.2
 
 - **Enhanced UI Controls**: Consistent fullscreen and reset functionality across all diagram components
