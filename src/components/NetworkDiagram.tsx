@@ -11,7 +11,9 @@ import ReactFlow, {
   ConnectionLineType,
   ReactFlowProvider,
   Panel,
-  Handle
+  Handle,
+  NodeChange,
+  NodePositionChange
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { 
@@ -39,6 +41,11 @@ import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import SaveIcon from '@mui/icons-material/Save';
+import ClearIcon from '@mui/icons-material/Clear';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import * as XLSX from 'xlsx';
 // @ts-ignore
 import { saveAs } from 'file-saver';
@@ -108,6 +115,80 @@ const DiagramCanvas = () => {
   const { tasks, criticalPaths, isCalculated } = useProject();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [savedPositions, setSavedPositions] = useState<{ [key: string]: { x: number, y: number } }>({});
+  const diagramContainerRef = useRef<HTMLDivElement>(null);
+
+  // Toggle full screen mode using the Fullscreen API
+  const toggleFullScreen = () => {
+    if (!isFullScreen) {
+      if (diagramContainerRef.current?.requestFullscreen) {
+        diagramContainerRef.current.requestFullscreen()
+          .then(() => setIsFullScreen(true))
+          .catch(err => console.error("Error attempting to enable fullscreen:", err));
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen()
+          .then(() => setIsFullScreen(false))
+          .catch(err => console.error("Error attempting to exit fullscreen:", err));
+      }
+    }
+  };
+
+  // Listen for fullscreen change events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Reset node positions to original layout
+  const handleResetPositions = () => {
+    // Force re-render with recalculated positions
+    if (tasks.length > 0) {
+      const positions = calculatePositions(tasks);
+      setSavedPositions({});
+      
+      const newNodes = nodes.map(node => ({
+        ...node,
+        position: positions[node.id] || node.position
+      }));
+      
+      setNodes(newNodes);
+    }
+  };
+
+  // Handle when nodes change positions
+  const handleNodesChange = (changes: NodeChange[]) => {
+    onNodesChange(changes);
+    
+    // Save position changes
+    const positionChanges = changes.filter((change): change is NodePositionChange => 
+      change.type === 'position' && !change.dragging
+    );
+    
+    if (positionChanges.length > 0) {
+      positionChanges.forEach(change => {
+        const nodeId = change.id;
+        const updatedNode = nodes.find(n => n.id === nodeId);
+        if (updatedNode) {
+          setSavedPositions(prev => ({
+            ...prev,
+            [nodeId]: {
+              x: updatedNode.position.x,
+              y: updatedNode.position.y
+            }
+          }));
+        }
+      });
+    }
+  };
 
   // 计算坐标
   const calculatePositions = useCallback((tasks: Task[]) => {
@@ -179,8 +260,15 @@ const DiagramCanvas = () => {
       levelPositions[level] = position + 1;
     }
     
+    // Override with saved positions if available
+    for (const taskId in savedPositions) {
+      if (taskPositions[taskId]) {
+        taskPositions[taskId] = savedPositions[taskId];
+      }
+    }
+    
     return taskPositions;
-  }, []);
+  }, [savedPositions]);
 
   // 创建节点和边
   const createFlowElements = useCallback((tasks: Task[]) => {
@@ -254,12 +342,14 @@ const DiagramCanvas = () => {
     return { nodes, edges };
   }, [calculatePositions, isCalculated]);
 
-  // 当计算结果变化时更新图形
+  // 当任务或计算结果变化时，更新网络图
   useEffect(() => {
-    const { nodes: newNodes, edges: newEdges } = createFlowElements(tasks);
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [tasks, isCalculated, createFlowElements, setNodes, setEdges]);
+    if (isCalculated && tasks.length > 0) {
+      const flowElements = createFlowElements(tasks);
+      setNodes(flowElements.nodes);
+      setEdges(flowElements.edges);
+    }
+  }, [tasks, isCalculated, createFlowElements]);
 
   // 未计算时显示提示信息
   if (!isCalculated) {
@@ -273,32 +363,30 @@ const DiagramCanvas = () => {
   }
 
   return (
-    <div style={{ width: '100%', height: '100%' }}>
+    <Box 
+      ref={diagramContainerRef}
+      sx={{ 
+        width: '100%', 
+        height: '100%', 
+        minHeight: '600px'
+      }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
+        onNodesChange={handleNodesChange}
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
-        defaultEdgeOptions={{
-          type: 'straight',
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 24,
-            height: 24,
-            color: '#1a365d',
-          },
-          style: {
-            strokeWidth: 2,
-            stroke: '#1a365d',
-          },
-        }}
+        connectionLineType={ConnectionLineType.Straight}
         fitView
         fitViewOptions={{ padding: 0.3 }}
         minZoom={0.1}
         maxZoom={4}
         style={{ background: '#f8f8f8' }}
+        attributionPosition="bottom-left"
       >
+        <Controls showInteractive={true} />
+        <Background color="#e8e8e8" gap={16} />
         <Panel position="top-left">
           <div style={{ 
             background: 'rgba(255,255,255,0.85)', 
@@ -334,10 +422,28 @@ const DiagramCanvas = () => {
             </div>
           </div>
         </Panel>
-        <Background color="#e8e8e8" gap={16} />
-        <Controls showInteractive={true} />
+        <Panel position="top-right">
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<RestartAltIcon />}
+              onClick={handleResetPositions}
+            >
+              Reset
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={isFullScreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+              onClick={toggleFullScreen}
+            >
+              {isFullScreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </Button>
+          </Box>
+        </Panel>
       </ReactFlow>
-    </div>
+    </Box>
   );
 };
 
@@ -361,6 +467,9 @@ const NetworkDiagram: React.FC = () => {
   
   // 状态管理
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [loadDialogOpen, setLoadDialogOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
   const [savedProjects, setSavedProjects] = useState<SavedProjectData[]>([]);
   const [editingProject, setEditingProject] = useState<{id: string, name: string} | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -623,23 +732,59 @@ const NetworkDiagram: React.FC = () => {
     }
   };
 
+  // 处理保存项目
+  const handleSaveProject = () => {
+    if (tasks.length === 0) {
+      showAlert('No tasks to save', 'error');
+      return;
+    }
+    setSaveDialogOpen(true);
+  };
+
+  // 处理保存对话框确认
+  const handleConfirmSave = () => {
+    const success = saveProject(newProjectName);
+    if (success) {
+      showAlert(`Project "${newProjectName || 'Untitled'}" saved successfully`, 'success');
+      setSaveDialogOpen(false);
+      setNewProjectName('');
+    } else {
+      showAlert('Failed to save project', 'error');
+    }
+  };
+
+  // 处理加载项目
+  const handleLoadProjectClick = () => {
+    try {
+      // 获取保存的项目列表
+      const projects = getSavedProjects();
+      
+      if (projects.length === 0) {
+        showAlert('No saved projects found', 'error');
+        return;
+      }
+      
+      setSavedProjects(projects);
+      setLoadDialogOpen(true);
+    } catch (err) {
+      showAlert('Failed to load project list', 'error');
+      console.error('Failed to load project list:', err);
+    }
+  };
+
+  // 处理清除项目
+  const handleClearProject = () => {
+    if (window.confirm('Are you sure you want to clear the current project?')) {
+      clearProject();
+      showAlert('Project cleared successfully', 'success');
+    }
+  };
+
   return (
     <Paper elevation={3} sx={{ p: 3, mb: 4 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6" component="h2" gutterBottom>
-          Network Diagram
-        </Typography>
-        
-        <Button
-          variant="outlined"
-          color="primary"
-          startIcon={<SettingsIcon />}
-          onClick={handleManageProjects}
-          size="small"
-        >
-          Manage Network Diagrams
-        </Button>
-      </Box>
+      <Typography variant="h6" component="h2" gutterBottom>
+        Network Diagram
+      </Typography>
       
       <Box sx={{ height: 700, border: '1px solid #ccc', position: 'relative' }}>
         <ReactFlowProvider>
@@ -663,11 +808,11 @@ const NetworkDiagram: React.FC = () => {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>Manage Network Diagrams</DialogTitle>
+        <DialogTitle>Manage Projects</DialogTitle>
         <DialogContent>
           {savedProjects.length === 0 ? (
             <Typography variant="body1" align="center" sx={{ my: 2 }}>
-              No saved network diagrams found
+              No saved projects found
             </Typography>
           ) : (
             <List>
@@ -707,27 +852,27 @@ const NetworkDiagram: React.FC = () => {
                           onClick={() => handleExportToExcel(project)} 
                           title="Export to Excel"
                           size="small"
-                          sx={{ color: 'primary.main', width: '28px', height: '28px' }}
+                          sx={{ color: 'primary.main' }}
                         >
-                          <FileDownloadIcon fontSize="small" />
+                          <FileDownloadIcon />
                         </IconButton>
                         <IconButton 
                           edge="end" 
                           onClick={() => handleEditProjectName(project)}
                           title="Edit Project Name"
                           size="small"
-                          sx={{ color: 'primary.main', width: '28px', height: '28px' }}
+                          sx={{ color: 'primary.main' }}
                         >
-                          <EditIcon fontSize="small" />
+                          <EditIcon />
                         </IconButton>
                         <IconButton 
                           edge="end" 
                           onClick={() => handleDeleteProject(project.id)}
                           title="Delete Project"
                           size="small"
-                          sx={{ color: 'error.main', width: '28px', height: '28px' }}
+                          sx={{ color: 'error.main' }}
                         >
-                          <DeleteIcon fontSize="small" />
+                          <DeleteIcon />
                         </IconButton>
                       </ListItemSecondaryAction>
                     </>

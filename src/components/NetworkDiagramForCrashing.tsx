@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -15,9 +15,11 @@ import ReactFlow, {
   NodePositionChange
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Box, Paper, Typography, Divider, Alert, Button } from '@mui/material';
+import { Box, Paper, Typography, Divider, Button } from '@mui/material';
 import { useProjectCrashing, CrashTask, NodePosition } from '../hooks/ProjectCrashingContext';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 
 // 自定义节点样式
 const customNodeStyles = {
@@ -110,13 +112,43 @@ const DiagramCanvas = () => {
   } = useProjectCrashing();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const diagramContainerRef = useRef<HTMLDivElement>(null);
+
+  // Toggle full screen mode using the Fullscreen API
+  const toggleFullScreen = () => {
+    if (!isFullScreen) {
+      if (diagramContainerRef.current?.requestFullscreen) {
+        diagramContainerRef.current.requestFullscreen()
+          .then(() => setIsFullScreen(true))
+          .catch(err => console.error("Error attempting to enable fullscreen:", err));
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen()
+          .then(() => setIsFullScreen(false))
+          .catch(err => console.error("Error attempting to exit fullscreen:", err));
+      }
+    }
+  };
+
+  // Listen for fullscreen change events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   // Consolidated logic for getting tasks based on current state
   const getCurrentTasks = useCallback((): CrashTask[] => {
     if (!isCrashed) {
       // NOT CRASHED: Display tasks from context, ensuring duration is normalTime.
       // This state is for when tasks are being added/edited BEFORE performCrashing.
-      console.log("Diagram: Not crashed. Using context tasks, mapping duration to normalTime.");
       return crashTasks.map(task => ({
         ...task,
         duration: task.normalTime, 
@@ -125,11 +157,9 @@ const DiagramCanvas = () => {
       // CRASHED: Use history. Iteration 0 should have duration = normalTime.
       if (crashedTasksHistory.length > 0) {
         const iterationIndex = Math.min(currentIteration, crashedTasksHistory.length - 1);
-        console.log(`Diagram: Crashed. Using history for iteration ${iterationIndex}.`);
         return crashedTasksHistory[iterationIndex];
       } else {
         // Fallback if history is unexpectedly empty after crashing.
-        console.log("Diagram: Crashed, but no history. Defaulting to context tasks with duration as normalTime.");
         return crashTasks.map(task => ({ ...task, duration: task.normalTime }));
       }
     }
@@ -267,31 +297,17 @@ const DiagramCanvas = () => {
     const tasksToDisplay = getCurrentTasks();
 
     if (!tasksToDisplay || tasksToDisplay.length === 0) {
-      console.log("Diagram createFlowElements: No tasks to display.");
       return { nodes: [], edges: [] };
     }
-    console.log("Diagram createFlowElements: Processing tasks - ", tasksToDisplay.map(t => `${t.id}: dur=${t.duration}, normal=${t.normalTime}`));
-
-    // --- TARGETED LOG FOR TASK B AT ITERATION 0 ---
-    if (currentIteration === 0) {
-      const taskB_forDiagram = tasksToDisplay.find(t => t.id === 'B');
-      if (taskB_forDiagram) {
-        console.log(`[DIAGRAM] createFlowElements (Iter 0) - Task B data: id=${taskB_forDiagram.id}, duration=${taskB_forDiagram.duration}, normalTime=${taskB_forDiagram.normalTime}, crashTime=${taskB_forDiagram.crashTime}`);
-      } else {
-        console.log("[DIAGRAM] createFlowElements (Iter 0) - Task B not found in tasksToDisplay.");
-      }
-    }
-    // --- END TARGETED LOG ---
 
     const positions = calculatePositions(tasksToDisplay);
     const currentCrashedActivities = getCrashedActivities();
 
     const newNodes: Node[] = tasksToDisplay.map(task => {
       let nodeOriginalDuration;
-      // Show originalDuration only if crashed, for iterations > 0, and if duration actually changed from initial state.
+      // 仅当项目已压缩、不是初始迭代且持续时间已改变时才显示原始持续时间
       if (isCrashed && currentIteration > 0 && crashedTasksHistory.length > 0 && crashedTasksHistory[0]) {
         const initialTaskState = crashedTasksHistory[0].find(t => t.id === task.id);
-        // initialTaskState.duration should be normalTime
         if (initialTaskState && initialTaskState.duration !== task.duration) {
           nodeOriginalDuration = initialTaskState.duration; 
         }
@@ -303,9 +319,9 @@ const DiagramCanvas = () => {
         position: positions[task.id] || { x: 0, y: 0 },
         data: {
           label: `${task.id}${task.description ? ': ' + task.description : ''}`,
-          duration: task.duration, // Directly from getCurrentTasks
+          duration: task.duration,
           originalDuration: nodeOriginalDuration,
-          normalTime: task.normalTime, // Keep for reference if needed, but not displayed by default
+          normalTime: task.normalTime,
           normalCost: task.normalCost,
           crashTime: task.crashTime,
           crashCost: task.crashCost,
@@ -345,7 +361,6 @@ const DiagramCanvas = () => {
 
   // useEffect to update diagram when relevant data changes
   useEffect(() => {
-    console.log("DiagramCanvas useEffect: Triggered.");
     const { nodes: newNodes, edges: newEdges } = createFlowElements();
     setNodes(newNodes);
     setEdges(newEdges);
@@ -363,7 +378,14 @@ const DiagramCanvas = () => {
   }
 
   return (
-    <div style={{ width: '100%', height: '600px' }}>
+    <div 
+      ref={diagramContainerRef}
+      style={{ 
+        width: '100%', 
+        height: isFullScreen ? '100vh' : '600px',
+        position: 'relative'
+      }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -424,22 +446,25 @@ const DiagramCanvas = () => {
             </div>
           </div>
         </Panel>
-        <Panel position="bottom-right">
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<RestartAltIcon fontSize="small" />}
-            onClick={handleResetPositions}
-            sx={{ 
-              mb: 1, 
-              fontSize: '0.75rem', 
-              py: 0.5, 
-              px: 1,
-              backgroundColor: 'rgba(255,255,255,0.85)'
-            }}
-          >
-            Reset
-          </Button>
+        <Panel position="top-right">
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<RestartAltIcon />}
+              onClick={handleResetPositions}
+            >
+              Reset
+            </Button>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={isFullScreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+              onClick={toggleFullScreen}
+            >
+              {isFullScreen ? 'Exit Fullscreen' : 'Fullscreen'}
+            </Button>
+          </Box>
         </Panel>
       </ReactFlow>
     </div>

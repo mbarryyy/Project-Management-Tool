@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] - 2023-08-05
+
+### Added
+- Fullscreen capability for main Network Diagram component
+- Reset button for reverting to original diagram layout in all views
+
+### Changed
+- Standardized UI control positioning across all diagram components
+- Moved diagram controls to top-right corner for better consistency
+- Improved button labeling and icon usage
+
+### Fixed
+- Diagram rendering and responsiveness in fullscreen mode
+- Button interaction and state management for fullscreen toggle
+
 ## [1.1.1] - 2023-07-30
 
 ### Added

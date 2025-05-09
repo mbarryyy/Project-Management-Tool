@@ -1,6 +1,13 @@
-# Project Management Tool - Version 1.1.1
+# Project Management Tool - Version 1.1.2
 
 A comprehensive project management application with Critical Path Method (CPM) and Project Crashing features.
+
+## What's New in Version 1.1.2
+
+- **Enhanced UI Controls**: Consistent fullscreen and reset functionality across all diagram components
+- **Improved User Experience**: Standardized button positioning in top-right corner for all diagrams
+- **Fullscreen Support**: Added fullscreen viewing capability to main Network Diagram
+- **Control Unification**: Aligned UI patterns between different diagram components
 
 ## What's New in Version 1.1.1
 
@@ -109,6 +116,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Release History
 
+- **v1.1.2** - : Enhanced diagram controls with consistent UI patterns and fullscreen capability
 - **v1.1.1** - : Added Excel import/export, position persistence, unified UI styling
 - **v1.1.0** - : Enhanced UI/UX, performance improvements, bug fixes, improved crashing algorithm
 - **v1.0.0** - : Initial release with basic CPM and Project Crashing features
