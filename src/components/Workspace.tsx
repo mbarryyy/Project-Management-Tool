@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Container,
   Box,
@@ -27,6 +27,10 @@ import InfoIcon from '@mui/icons-material/Info';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SettingsIcon from '@mui/icons-material/Settings';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import * as XLSX from 'xlsx';
+// @ts-ignore
+import { saveAs } from 'file-saver';
 
 import TaskForm from './TaskForm';
 import TaskTable from './TaskTable';
@@ -50,7 +54,8 @@ const Workspace: React.FC = () => {
     selectedTaskId,
     getSavedProjects,
     deleteProject,
-    updateProjectName
+    updateProjectName,
+    addTask
   } = useProject();
 
   // UI状态
@@ -66,6 +71,8 @@ const Workspace: React.FC = () => {
   const [projectNameInput, setProjectNameInput] = useState('');
   const [savedProjects, setSavedProjects] = useState<SavedProjectData[]>([]);
   const [editingProject, setEditingProject] = useState<{id: string, name: string} | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 显示提示信息
   const showAlert = (message: string, severity: 'success' | 'error') => {
@@ -198,6 +205,184 @@ const Workspace: React.FC = () => {
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to generate network diagram';
       showAlert(`Error: ${errorMessage}`, 'error');
+    }
+  };
+
+  // 在现有函数之后添加导出Excel功能
+  const handleExportToExcel = (projectToExport?: SavedProjectData) => {
+    const tasksToExport = projectToExport ? projectToExport.tasks : tasks;
+    const projectNameToExport = projectToExport ? projectToExport.name : projectName;
+    
+    // 创建工作簿
+    const workbook = XLSX.utils.book_new();
+    
+    // 创建任务表格
+    const tasksHeaders = ['Task ID', 'Description', 'Predecessors', 'Duration'];
+    const tasksData = tasksToExport.map(task => [
+      task.id,
+      task.description,
+      task.predecessors.map(p => p.taskId).join(','),
+      task.duration
+    ]);
+    
+    // 添加标题行
+    const titleRow = [`Task List - ${projectNameToExport || 'Project'}`];
+    const completeTasksData = [titleRow, [], tasksHeaders, ...tasksData];
+    
+    const tasksSheet = XLSX.utils.aoa_to_sheet(completeTasksData);
+    
+    // 设置列宽
+    const wscols = [
+      { wch: 10 }, // Task ID
+      { wch: 30 }, // Description
+      { wch: 15 }, // Predecessors
+      { wch: 15 }, // Duration
+    ];
+    
+    tasksSheet['!cols'] = wscols;
+    
+    // 添加到工作簿
+    XLSX.utils.book_append_sheet(workbook, tasksSheet, 'Task List');
+    
+    // 生成Excel文件
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const data = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    
+    // 文件名包含日期和时间
+    const dateStr = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const fileName = `${projectNameToExport || 'Project'}_TaskList_${dateStr}.xlsx`;
+    
+    // 保存文件
+    saveAs(data, fileName);
+    
+    // 显示成功信息
+    showAlert(`Task List exported as "${fileName}"`, 'success');
+  };
+
+  // 添加导入Excel功能
+  const handleImportFromExcel = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // 重置文件输入字段
+    event.target.value = '';
+    
+    // 读取Excel文件
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        
+        // 获取第一个工作表
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        
+        // 转换为JSON
+        const jsonData = XLSX.utils.sheet_to_json<any>(worksheet, { header: 1, blankrows: false });
+        
+        // 验证格式 - 查找表头行
+        let headerRowIndex = -1;
+        for (let i = 0; i < jsonData.length; i++) {
+          const row = jsonData[i];
+          if (Array.isArray(row) && 
+              row.includes('Task ID') && 
+              row.includes('Description') && 
+              row.includes('Predecessors') && 
+              row.includes('Duration')) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        if (headerRowIndex === -1) {
+          setImportError('Invalid file format: Headers not found');
+          return;
+        }
+        
+        // 获取列索引
+        const headers = jsonData[headerRowIndex];
+        const taskIdIndex = headers.indexOf('Task ID');
+        const descriptionIndex = headers.indexOf('Description');
+        const predecessorsIndex = headers.indexOf('Predecessors');
+        const durationIndex = headers.indexOf('Duration');
+        
+        // 验证必要列是否存在
+        if (taskIdIndex === -1 || durationIndex === -1) {
+          setImportError('Invalid file format: Required columns missing');
+          return;
+        }
+        
+        // 解析任务数据并添加到项目
+        const importedTasks = [];
+        let invalidRowFound = false;
+        
+        for (let i = headerRowIndex + 1; i < jsonData.length; i++) {
+          const row = jsonData[i];
+          
+          // 确保行有效
+          if (!row || !row[taskIdIndex] || row[taskIdIndex] === '') continue;
+          
+          // 检查必填字段
+          if (row[durationIndex] === undefined) {
+            invalidRowFound = true;
+            continue;
+          }
+          
+          // 处理前置任务
+          let predecessorIds = [];
+          if (predecessorsIndex !== -1 && row[predecessorsIndex]) {
+            predecessorIds = row[predecessorsIndex].toString().split(',').map((id: string) => id.trim());
+          }
+          
+          // 添加到导入任务数组
+          importedTasks.push({
+            id: row[taskIdIndex].toString(),
+            description: descriptionIndex !== -1 ? (row[descriptionIndex]?.toString() || '') : '',
+            duration: parseFloat(row[durationIndex]),
+            predecessorIds
+          });
+        }
+        
+        if (importedTasks.length === 0) {
+          setImportError('No valid tasks found in the file');
+          return;
+        }
+        
+        // 清除现有数据
+        clearProject();
+        
+        // 添加导入的任务
+        importedTasks.forEach(task => {
+          // 直接使用TaskForm中的字段格式添加
+          addTask({
+            id: task.id,
+            description: task.description,
+            duration: task.duration,
+            predecessorIds: task.predecessorIds
+          });
+        });
+        
+        // 成功导入
+        setManageDialogOpen(false);
+        showAlert(`Successfully imported ${importedTasks.length} tasks${invalidRowFound ? ' (some invalid rows were skipped)' : ''}`, 'success');
+        
+      } catch (err) {
+        console.error('Error importing file:', err);
+        setImportError('Failed to import file. Please check the file format.');
+      }
+    };
+    
+    reader.onerror = () => {
+      setImportError('Error reading the file');
+    };
+    
+    reader.readAsArrayBuffer(file);
+  };
+
+  // 添加触发文件选择的函数
+  const handleImportButtonClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
     }
   };
 
@@ -430,11 +615,32 @@ const Workspace: React.FC = () => {
                         primary={project.name} 
                         secondary={`Last updated: ${new Date(project.lastUpdated).toLocaleString()} | Tasks: ${project.tasks.length}`} 
                       />
-                      <ListItemSecondaryAction>
-                        <IconButton edge="end" onClick={() => handleEditProjectName(project)}>
+                      <ListItemSecondaryAction sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleExportToExcel(project)} 
+                          title="Export to Excel"
+                          size="small"
+                          sx={{ color: 'primary.main' }}
+                        >
+                          <FileDownloadIcon />
+                        </IconButton>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleEditProjectName(project)}
+                          title="Edit Project Name"
+                          size="small"
+                          sx={{ color: 'primary.main' }}
+                        >
                           <EditIcon />
                         </IconButton>
-                        <IconButton edge="end" onClick={() => handleDeleteProject(project.id)}>
+                        <IconButton 
+                          edge="end" 
+                          onClick={() => handleDeleteProject(project.id)}
+                          title="Delete Project"
+                          size="small"
+                          sx={{ color: 'error.main' }}
+                        >
                           <DeleteIcon />
                         </IconButton>
                       </ListItemSecondaryAction>
@@ -444,11 +650,39 @@ const Workspace: React.FC = () => {
               ))}
             </List>
           )}
+          
+          {importError && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {importError}
+            </Alert>
+          )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setManageDialogOpen(false)}>Close</Button>
+        <DialogActions sx={{ justifyContent: 'space-between', px: 3, pb: 2 }}>
+          <Button 
+            variant="outlined" 
+            color="primary" 
+            onClick={handleImportButtonClick}
+            startIcon={<FolderOpenIcon />}
+          >
+            Import from Excel
+          </Button>
+          <Button onClick={() => {
+            setManageDialogOpen(false);
+            setImportError(null);
+          }}>
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
+
+      {/* 隐藏的文件输入 */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImportFromExcel}
+        style={{ display: 'none' }}
+        accept=".xlsx,.xls"
+      />
     </>
   );
 };

@@ -139,15 +139,46 @@ export const ProjectCrashingProvider: React.FC<{ children: ReactNode }> = ({ chi
 
   // Function to add a new task
   const addCrashTask = useCallback((task: CrashTask) => {
-    setCrashTasks(prev => [...prev, task]);
+    // Calculate maxCrashTime and slope before adding the task
+    const maxCrashTime = task.normalTime - task.crashTime;
+    const slope = maxCrashTime > 0 
+      ? (task.crashCost - task.normalCost) / maxCrashTime 
+      : Number.MAX_SAFE_INTEGER; // If task can't be crashed, set slope to infinity
+    
+    // Add the task with calculated properties
+    setCrashTasks(prev => [...prev, {
+      ...task,
+      maxCrashTime,
+      slope
+    }]);
   }, []);
 
   // Function to update a task
   const updateCrashTask = useCallback((taskId: string, updatedTask: Partial<CrashTask>) => {
     setCrashTasks(prev => 
-      prev.map(task => 
-        task.id === taskId ? { ...task, ...updatedTask } : task
-      )
+      prev.map(task => {
+        if (task.id !== taskId) return task;
+        
+        // Create the updated task by merging old and new properties
+        const updated = { ...task, ...updatedTask };
+        
+        // Recalculate maxCrashTime and slope if normalTime, crashTime, normalCost, or crashCost changed
+        if (
+          updatedTask.normalTime !== undefined || 
+          updatedTask.crashTime !== undefined || 
+          updatedTask.normalCost !== undefined || 
+          updatedTask.crashCost !== undefined
+        ) {
+          const maxCrashTime = updated.normalTime - updated.crashTime;
+          const slope = maxCrashTime > 0 
+            ? (updated.crashCost - updated.normalCost) / maxCrashTime 
+            : Number.MAX_SAFE_INTEGER; // If task can't be crashed, set slope to infinity
+          
+          return { ...updated, maxCrashTime, slope };
+        }
+        
+        return updated;
+      })
     );
   }, []);
 
